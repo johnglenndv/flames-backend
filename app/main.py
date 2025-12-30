@@ -236,19 +236,25 @@ def login(user: UserLogin):
     db = SessionLocal()
 
     db_user = db.query(User).filter(User.username == user.username).first()
-    db.close()
-    
-    password = password.encode("utf-8")[:72].decode("utf-8")
-
     if not db_user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        db.close()
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    password = user.password.encode("utf-8")[:72].decode("utf-8")
 
     if not pwd_context.verify(password, db_user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        db.close()
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    db.close()
 
     return {
         "message": "Login successful",
-        "username": db_user.username,
-        "organization": db_user.organization
+        "user": {
+            "id": db_user.id,
+            "username": db_user.username,
+            "organization": db_user.organization
+        }
     }
+
 
