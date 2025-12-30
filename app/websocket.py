@@ -1,6 +1,5 @@
 from fastapi import WebSocket
 from typing import List, Dict
-import asyncio
 
 class WebSocketManager:
     def __init__(self):
@@ -23,7 +22,7 @@ class WebSocketManager:
             except Exception:
                 dead_clients.append(client)
 
-        # Cleanup dead connections
+        # Clean up dead connections
         for dc in dead_clients:
             self.disconnect(dc)
 

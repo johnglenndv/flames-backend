@@ -48,16 +48,12 @@ def root():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
-
     try:
         while True:
-            # 🔁 Heartbeat every 20s (keeps Render alive)
-            await asyncio.sleep(20)
-            await websocket.send_json({"type": "ping"})
+            # Keep connection open
+            await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-
-        
 
 
 # -------------------------
@@ -103,7 +99,7 @@ async def ingest(data: TelemetryIn):
 
     await manager.broadcast({
         "type": "node_update",
-        "data": data.dict()
+        "data": data.model_dump()
     })
 
     return {"status": "stored"}
