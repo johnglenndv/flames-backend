@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from datetime import datetime
 from passlib.context import CryptContext
@@ -10,7 +12,6 @@ from app.websocket import manager
 from app.database import SessionLocal
 from app.models import Telemetry
 from app.schemas import TelemetryIn
-
 
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,6 +53,94 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+# 🔥 SEND INITIAL STATE
+    db = SessionLocal()
+    nodes = fetch_latest_nodes(db)
+    incidents = fetch_active_incidents(db)
+    db.close()
+
+    await websocket.send_json({
+        "type": "init",
+        "data": {
+            "nodes": nodes,
+            "incidents": incidents
+        }
+    })
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        
+# -------------------------
+# Helper Functions
+def fetch_latest_nodes(db):
+    rows = db.execute("""
+        SELECT t.*
+        FROM telemetry t
+        INNER JOIN (
+            SELECT node, MAX(received_at) AS max_time
+            FROM telemetry
+            GROUP BY node
+        latest ON t.node = latest.node AND t.received_at = latest.max_time
+    """).mappings().all()
+
+    return {
+        r["node"]: {
+            "node": r["node"],
+            "lat": r["lat"],
+            "lon": r["lon"],
+            "temp": r["temp"],
+            "hum": r["hum"],
+            "smoke": r["smoke"],
+            "flame": bool(r["flame"]),
+            "received_at": r["received_at"].isoformat()
+        }
+        for r in rows
+    }
+
+
+def fetch_active_incidents(db):
+    rows = db.execute("""
+        SELECT *
+        FROM telemetry
+        WHERE flame = 1 OR smoke = 1
+        ORDER BY received_at DESC
+        LIMIT 20
+    """).mappings().all()
+
+    return [
+        {
+            "node": r["node"],
+            "type": "flame" if r["flame"] else "smoke",
+            "received_at": r["received_at"].isoformat()
+        }
+        for r in rows
+    ]
+
+
+
+async def periodic_broadcast():
+    while True:
+        await asyncio.sleep(5)
+        db = SessionLocal()
+        nodes = fetch_latest_nodes(db)
+        incidents = fetch_active_incidents(db)
+        db.close()
+
+        await manager.broadcast({
+            "type": "snapshot",
+            "data": {
+                "nodes": nodes,
+                "incidents": incidents
+            }
+        })
+
+@app.on_event("startup")
+async def start_broadcast():
+    asyncio.create_task(periodic_broadcast())
 
 
 # -------------------------
