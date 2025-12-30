@@ -214,7 +214,9 @@ def signup(user: UserSignup):
         db.close()
         raise HTTPException(status_code=400, detail="Username already exists")
 
-    hashed = pwd_context.hash(user.password)
+    password = user.password.encode("utf-8")[:72].decode("utf-8")
+    hashed = pwd_context.hash(password)
+
 
     new_user = User(
         username=user.username,
@@ -235,11 +237,13 @@ def login(user: UserLogin):
 
     db_user = db.query(User).filter(User.username == user.username).first()
     db.close()
+    
+    password = password.encode("utf-8")[:72].decode("utf-8")
 
     if not db_user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not pwd_context.verify(user.password, db_user.password_hash):
+    if not pwd_context.verify(password, db_user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     return {
