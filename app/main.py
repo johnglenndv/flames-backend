@@ -1,132 +1,212 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text, func
 import asyncio
-from datetime import datetime
 
-from app.database import SessionLocal
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from datetime import datetime
+from passlib.context import CryptContext
+from app.models import User
+
+from app.schemas import TelemetryIn, UserSignup, UserLogin
+from app.state import nodes, incidents
 from app.websocket import manager
 
+from app.database import SessionLocal
 from app.models import Telemetry
+from app.schemas import TelemetryIn
 
-app = FastAPI()
 
-# -------------------------
-# CORS
-# -------------------------
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="F.L.A.M.E.S Backend")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later
+    allow_origins=[
+        "https://flames-testing.vercel.app",
+        "https://flames-backend-hbu0.onrender.com",
+        "http://localhost",
+        "http://127.0.0.1:5500"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 # -------------------------
-# DB helpers
+# Health Check
 # -------------------------
-def fetch_latest_nodes(db):
-    subq = (
-        db.query(
-            Telemetry.node,
-            func.max(Telemetry.received_at).label("max_time")
-        )
-        .group_by(Telemetry.node)
-        .subquery()
+@app.get("/")
+def root():
+    return {"status": "backend running"}
+
+
+# -------------------------
+# WebSocket
+# -------------------------
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        
+
+
+# -------------------------
+# Sensor Ingest
+# -------------------------
+@app.post("/ingest")
+async def ingest(data: TelemetryIn):
+    db = SessionLocal()
+
+    row = Telemetry(
+        node=data.node,
+        session=data.session,
+        seq=data.seq,
+        temp=data.temp,
+        hum=data.hum,
+        lat=data.lat,
+        lon=data.lon,
+        flame=data.flame,
+        smoke=data.smoke,
+        gateway=data.gateway,
+        rssi=data.rssi,
+        snr=data.snr,
+        received_at=data.received_at
     )
+
+    db.add(row)
+    db.commit()
+    db.close()
+
+    # Fire detection logic
+    if data.flame == 1 or (data.temp and data.temp >= 60) or (data.smoke and data.smoke >= 300):
+        incident = {
+            "node": data.node,
+            "severity": "HIGH",
+            "timestamp": data.received_at.isoformat()
+        }
+        incidents.append(incident)
+
+        await manager.broadcast({
+            "type": "incident",
+            "data": incident
+        })
+
+    await manager.broadcast({
+        "type": "node_update",
+        "data": data.dict()
+    })
+
+    return {"status": "stored"}
+
+
+
+
+# -------------------------
+# Dashboard APIs
+# -------------------------
+@app.get("/nodes")
+def get_nodes():
+    db = SessionLocal()
 
     rows = (
         db.query(Telemetry)
-        .join(
-            subq,
-            (Telemetry.node == subq.c.node) &
-            (Telemetry.received_at == subq.c.max_time)
-        )
+        .order_by(Telemetry.received_at.desc())
         .all()
     )
 
+    db.close()
+
+    latest = {}
+    for r in rows:
+        if r.node not in latest:
+            latest[r.node] = {
+                "node": r.node,
+                "lat": r.lat,
+                "lon": r.lon,
+                "temp": r.temp,
+                "hum": r.hum,
+                "smoke": r.smoke,
+                "flame": bool(r.flame),
+                "received_at": r.received_at
+            }
+
+    return latest
+
+
+@app.get("/nodes/{node_id}")
+def get_node(node_id: str):
+    db = SessionLocal()
+
+    row = (
+        db.query(Telemetry)
+        .filter(Telemetry.node == node_id)
+        .order_by(Telemetry.received_at.desc())
+        .first()
+    )
+
+    db.close()
+
+    if not row:
+        return {"error": "Node not found"}
+
     return {
-        r.node: {
-            "node": r.node,
-            "lat": r.lat,
-            "lon": r.lon,
-            "temp": r.temp,
-            "hum": r.hum,
-            "smoke": r.smoke,
-            "flame": r.flame,
-            "received_at": r.received_at.isoformat(),
-        }
-        for r in rows
+        "node": row.node,
+        "lat": row.lat,
+        "lon": row.lon,
+        "temp": row.temp,
+        "hum": row.hum,
+        "smoke": row.smoke,
+        "flame": bool(row.flame),
+        "received_at": row.received_at
     }
 
 
-def fetch_active_incidents(db):
+
+@app.get("/incidents")
+def get_incidents():
+    db = SessionLocal()
+
     rows = (
         db.query(Telemetry)
-        .filter((Telemetry.flame == True) | (Telemetry.smoke == True))
+        .filter(
+            (Telemetry.flame == 1) |
+            (Telemetry.temp >= 60) |
+            (Telemetry.smoke >= 300)
+        )
+        .order_by(Telemetry.received_at.desc())
+        .limit(20)
         .all()
     )
 
-    return [
-        {
-            "node": r.node,
-            "flame": r.flame,
-            "smoke": r.smoke,
-            "received_at": r.received_at.isoformat(),
-        }
-        for r in rows
-    ]
+    db.close()
+
+    incidents = []
+    seen_nodes = set()
+
+    for r in rows:
+        if r.node not in seen_nodes:
+            incidents.append({
+                "node": r.node,
+                "severity": "HIGH",
+                "lat": r.lat,
+                "lon": r.lon,
+                "timestamp": r.received_at
+            })
+            seen_nodes.add(r.node)
+
+    return incidents
+
+
 
 # -------------------------
-# WebSocket endpoint
+# Authentication APIs
 # -------------------------
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    await manager.connect(ws)
-    try:
-        while True:
-            # keep connection alive
-            await asyncio.sleep(10)
-    except WebSocketDisconnect:
-        manager.disconnect(ws)
-
-# -------------------------
-# Background broadcaster
-# -------------------------
-async def periodic_broadcast():
-    while True:
-        db = SessionLocal()
-        try:
-            nodes = fetch_latest_nodes(db)
-            incidents = fetch_active_incidents(db)
-
-            payload = {
-                "type": "snapshot",
-                "data": {
-                    "nodes": nodes,
-                    "incidents": incidents,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-            }
-
-            await manager.broadcast(payload)
-
-        except Exception as e:
-            print("Broadcast error:", e)
-
-        finally:
-            db.close()
-
-        await asyncio.sleep(2)  # REALTIME interval
-
-# -------------------------
-# Startup
-# -------------------------
-<<<<<<< HEAD
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(periodic_broadcast())
-=======
 @app.post("/auth/signup")
 def signup(user: UserSignup):
     db = SessionLocal()
@@ -158,20 +238,25 @@ def login(user: UserLogin):
     db = SessionLocal()
 
     db_user = db.query(User).filter(User.username == user.username).first()
-    db.close()
-    
-    password = password.encode("utf-8")[:72].decode("utf-8")
-
     if not db_user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        db.close()
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    password = user.password.encode("utf-8")[:72].decode("utf-8")
 
     if not pwd_context.verify(password, db_user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        db.close()
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    db.close()
 
     return {
         "message": "Login successful",
-        "username": db_user.username,
-        "organization": db_user.organization
+        "user": {
+            "id": db_user.id,
+            "username": db_user.username,
+            "organization": db_user.organization
+        }
     }
 
->>>>>>> parent of 2e73fe4 (Update main.py)
+
