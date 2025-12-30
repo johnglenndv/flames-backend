@@ -1,6 +1,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from datetime import datetime
 from passlib.context import CryptContext
+from app.models import User
 
 from app.schemas import NodeData, UserSignup, UserLogin
 from app.state import nodes, incidents
