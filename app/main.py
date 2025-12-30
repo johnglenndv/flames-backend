@@ -1,4 +1,5 @@
 import asyncio
+from email.mime import text
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from datetime import datetime
@@ -12,6 +13,7 @@ from app.websocket import manager
 from app.database import SessionLocal
 from app.models import Telemetry
 from app.schemas import TelemetryIn
+from sqlalchemy import text
 
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -103,13 +105,16 @@ def fetch_latest_nodes(db):
 
 
 def fetch_active_incidents(db):
-    rows = db.execute("""
-        SELECT *
+    rows = db.execute(text("""
+        SELECT t.*
+        FROM telemetry t
+        JOIN (
+         SELECT node, MAX(received_at) AS max_time
         FROM telemetry
-        WHERE flame = 1 OR smoke = 1
-        ORDER BY received_at DESC
-        LIMIT 20
-    """).mappings().all()
+        GROUP BY node
+        ) latest
+        ON t.node = latest.node AND t.received_at = latest.max_time
+        """)).mappings().all()
 
     return [
         {
