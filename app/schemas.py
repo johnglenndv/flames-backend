@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from datetime import datetime
 
+
 class NodeData(BaseModel):
     node_id: str
     lat: float
@@ -11,8 +12,18 @@ class NodeData(BaseModel):
     flame: bool
     timestamp: datetime
 
+
 class Incident(BaseModel):
     node_id: str
-    location: str
     severity: str
     timestamp: datetime
+
+
+class UserSignup(BaseModel):
+    username: str
+    password: str
+
+
+class UserLogin(BaseModel):
+    username: str
+    password: str

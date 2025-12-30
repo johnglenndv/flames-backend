@@ -1,2 +1,2 @@
-nodes = {}         # node_id -> latest data
-incidents = []     # active fire incidents
+nodes: dict[str, dict] = {}
+incidents: list[dict] = []
