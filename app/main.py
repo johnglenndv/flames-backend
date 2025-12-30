@@ -48,13 +48,28 @@ def root():
 # WebSocket
 # -------------------------
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+async def websocket_endpoint(ws: WebSocket):
+    await manager.connect(ws)
+    db = SessionLocal()
     try:
         while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
+            try:
+                nodes = fetch_latest_nodes(db)
+                incidents = fetch_active_incidents(db)
+
+                await ws.send_json({
+                    "type": "snapshot",
+                    "nodes": nodes,
+                    "incidents": incidents
+                })
+            except Exception as e:
+                # don't kill the connection
+                await ws.send_json({"type": "error", "message": str(e)})
+
+            await asyncio.sleep(3)
+    finally:
+        db.close()
+        await manager.disconnect(ws)
 
 # 🔥 SEND INITIAL STATE
     db = SessionLocal()
@@ -79,18 +94,20 @@ async def websocket_endpoint(websocket: WebSocket):
 # -------------------------
 # Helper Functions
 def fetch_latest_nodes(db):
-    rows = db.execute("""
+    rows = db.execute(text("""
         SELECT t.*
         FROM telemetry t
-        INNER JOIN (
+        JOIN (
             SELECT node, MAX(received_at) AS max_time
             FROM telemetry
             GROUP BY node
-        latest ON t.node = latest.node AND t.received_at = latest.max_time
-    """).mappings().all()
+        ) latest
+        ON t.node = latest.node AND t.received_at = latest.max_time
+    """)).mappings().all()
 
-    return {
-        r["node"]: {
+    out = {}
+    for r in rows:
+        out[r["node"]] = {
             "node": r["node"],
             "lat": r["lat"],
             "lon": r["lon"],
@@ -98,10 +115,10 @@ def fetch_latest_nodes(db):
             "hum": r["hum"],
             "smoke": r["smoke"],
             "flame": bool(r["flame"]),
-            "received_at": r["received_at"].isoformat()
+            "received_at": r["received_at"].isoformat() if r["received_at"] else None,
+            "gateway": r.get("gateway"),
         }
-        for r in rows
-    }
+    return out
 
 
 def fetch_active_incidents(db):
