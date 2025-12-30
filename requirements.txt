@@ -1,9 +1,10 @@
 fastapi
-uvicorn[standard]
+uvicorn
 pydantic
 passlib[bcrypt]==1.7.4
 sqlalchemy
 mysql-connector-python
 python-dotenv
+uvicorn[standard]
 websockets
 bcrypt==4.1.2
