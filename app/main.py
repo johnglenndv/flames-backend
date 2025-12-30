@@ -45,13 +45,15 @@ def root():
 # -------------------------
 # WebSocket
 # -------------------------
+import asyncio
+from fastapi import WebSocket, WebSocketDisconnect
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
-        while True:
-            # Keep connection open
-            await websocket.receive_text()
+        # Keep connection open forever
+        await asyncio.Future()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
