@@ -106,6 +106,9 @@ async def ingest(data: TelemetryIn):
         "type": "node_update",
         "data": payload
     })
+    
+    print("CLIENTS COUNT:", len(manager.clients))
+
 
     return {"status": "stored"}
 
