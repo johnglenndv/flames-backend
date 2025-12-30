@@ -1,11 +1,13 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from sqlalchemy import text, func
 import asyncio
 from datetime import datetime
 
 from app.database import SessionLocal
 from app.websocket import manager
+
+from app.models import Node
 
 app = FastAPI()
 
@@ -24,33 +26,56 @@ app.add_middleware(
 # DB helpers
 # -------------------------
 def fetch_latest_nodes(db):
-    rows = db.execute(
-        text("""
-        SELECT t.*
-        FROM node_data t
-        JOIN (
-            SELECT node, MAX(received_at) AS max_time
-            FROM node_data
-            GROUP BY node
-        ) latest
-        ON t.node = latest.node
-        AND t.received_at = latest.max_time
-        """)
-    ).mappings().all()
+    subq = (
+        db.query(
+            Node.node,
+            func.max(Node.received_at).label("max_time")
+        )
+        .group_by(Node.node)
+        .subquery()
+    )
 
-    return {r["node"]: dict(r) for r in rows}
+    rows = (
+        db.query(Node)
+        .join(
+            subq,
+            (Node.node == subq.c.node) &
+            (Node.received_at == subq.c.max_time)
+        )
+        .all()
+    )
+
+    return {
+        r.node: {
+            "node": r.node,
+            "lat": r.lat,
+            "lon": r.lon,
+            "temp": r.temp,
+            "hum": r.hum,
+            "smoke": r.smoke,
+            "flame": r.flame,
+            "received_at": r.received_at.isoformat(),
+        }
+        for r in rows
+    }
 
 
 def fetch_active_incidents(db):
-    rows = db.execute(
-        text("""
-        SELECT *
-        FROM node_data
-        WHERE flame = 1 OR smoke = 1
-        """)
-    ).mappings().all()
+    rows = (
+        db.query(Node)
+        .filter((Node.flame == True) | (Node.smoke == True))
+        .all()
+    )
 
-    return list(rows)
+    return [
+        {
+            "node": r.node,
+            "flame": r.flame,
+            "smoke": r.smoke,
+            "received_at": r.received_at.isoformat(),
+        }
+        for r in rows
+    ]
 
 # -------------------------
 # WebSocket endpoint
