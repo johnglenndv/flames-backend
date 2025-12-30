@@ -20,8 +20,9 @@ app = FastAPI(title="F.L.A.M.E.S Backend")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://your-frontend.vercel.app",
-        "http://localhost:3000",
+        "https://flames-testing.vercel.app/",
+        "https://flames-backend-hbu0.onrender.com",
+        "http://localhost",
         "http://127.0.0.1:5500"
     ],
     allow_credentials=True,
