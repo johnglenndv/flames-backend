@@ -3,7 +3,7 @@ from datetime import datetime
 from passlib.context import CryptContext
 from app.models import User
 
-from app.schemas import NodeData, UserSignup, UserLogin
+from app.schemas import TelemetryIn, UserSignup, UserLogin
 from app.state import nodes, incidents
 from app.websocket import manager
 

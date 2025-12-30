@@ -4,3 +4,4 @@ pydantic
 passlib[bcrypt]
 sqlalchemy
 mysql-connector-python
+python-dotenv
