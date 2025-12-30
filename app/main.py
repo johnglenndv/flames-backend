@@ -83,23 +83,26 @@ async def ingest(data: TelemetryIn):
     db.commit()
     db.close()
 
-    # Fire detection logic
+    # Fire detection
     if data.flame == 1 or (data.temp and data.temp >= 60) or (data.smoke and data.smoke >= 300):
         incident = {
             "node": data.node,
             "severity": "HIGH",
             "timestamp": data.received_at.isoformat()
         }
-        incidents.append(incident)
 
         await manager.broadcast({
             "type": "incident",
             "data": incident
         })
 
+    # ✅ JSON-SAFE NODE UPDATE
+    payload = data.model_dump()
+    payload["received_at"] = payload["received_at"].isoformat()
+
     await manager.broadcast({
         "type": "node_update",
-        "data": data.model_dump()
+        "data": payload
     })
 
     return {"status": "stored"}
