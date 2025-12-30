@@ -122,6 +122,56 @@ async def periodic_broadcast():
 # -------------------------
 # Startup
 # -------------------------
+<<<<<<< HEAD
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(periodic_broadcast())
+=======
+@app.post("/auth/signup")
+def signup(user: UserSignup):
+    db = SessionLocal()
+
+    # check duplicate username
+    if db.query(User).filter(User.username == user.username).first():
+        db.close()
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    password = user.password.encode("utf-8")[:72].decode("utf-8")
+    hashed = pwd_context.hash(password)
+
+
+    new_user = User(
+        username=user.username,
+        organization=user.organization,
+        password_hash=hashed
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.close()
+
+    return {"message": "User registered successfully"}
+
+
+@app.post("/auth/login")
+def login(user: UserLogin):
+    db = SessionLocal()
+
+    db_user = db.query(User).filter(User.username == user.username).first()
+    db.close()
+    
+    password = password.encode("utf-8")[:72].decode("utf-8")
+
+    if not db_user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if not pwd_context.verify(password, db_user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    return {
+        "message": "Login successful",
+        "username": db_user.username,
+        "organization": db_user.organization
+    }
+
+>>>>>>> parent of 2e73fe4 (Update main.py)
