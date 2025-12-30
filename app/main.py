@@ -1,371 +1,102 @@
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 import asyncio
-from email.mime import text
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from datetime import datetime
-from passlib.context import CryptContext
-from app.models import User
-
-from app.schemas import TelemetryIn, UserSignup, UserLogin
-from app.state import nodes, incidents
-from app.websocket import manager
 
 from app.database import SessionLocal
-from app.models import Telemetry
-from app.schemas import TelemetryIn
-from sqlalchemy import text
+from app.websocket import manager
 
+app = FastAPI()
 
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI(title="F.L.A.M.E.S Backend")
-
+# -------------------------
+# CORS
+# -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://flames-testing.vercel.app",
-        "https://flames-backend-hbu0.onrender.com",
-        "http://localhost",
-        "http://127.0.0.1:5500"
-    ],
+    allow_origins=["*"],  # tighten later
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# -------------------------
+# DB helpers
+# -------------------------
+def fetch_latest_nodes(db):
+    rows = db.execute(
+        text("""
+        SELECT t.*
+        FROM node_data t
+        JOIN (
+            SELECT node, MAX(received_at) AS max_time
+            FROM node_data
+            GROUP BY node
+        ) latest
+        ON t.node = latest.node
+        AND t.received_at = latest.max_time
+        """)
+    ).mappings().all()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    return {r["node"]: dict(r) for r in rows}
+
+
+def fetch_active_incidents(db):
+    rows = db.execute(
+        text("""
+        SELECT *
+        FROM node_data
+        WHERE flame = 1 OR smoke = 1
+        """)
+    ).mappings().all()
+
+    return list(rows)
 
 # -------------------------
-# Health Check
-# -------------------------
-@app.get("/")
-def root():
-    return {"status": "backend running"}
-
-
-# -------------------------
-# WebSocket
+# WebSocket endpoint
 # -------------------------
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
-    db = SessionLocal()
     try:
         while True:
-            try:
-                nodes = fetch_latest_nodes(db)
-                incidents = fetch_active_incidents(db)
-
-                await ws.send_json({
-                    "type": "snapshot",
-                    "nodes": nodes,
-                    "incidents": incidents
-                })
-            except Exception as e:
-                # don't kill the connection
-                await ws.send_json({"type": "error", "message": str(e)})
-
-            await asyncio.sleep(3)
-    finally:
-        db.close()
-        await manager.disconnect(ws)
-
-# 🔥 SEND INITIAL STATE
-    db = SessionLocal()
-    nodes = fetch_latest_nodes(db)
-    incidents = fetch_active_incidents(db)
-    db.close()
-
-    await websocket.send_json({
-        "type": "init",
-        "data": {
-            "nodes": nodes,
-            "incidents": incidents
-        }
-    })
-
-    try:
-        while True:
-            await websocket.receive_text()
+            # keep connection alive
+            await asyncio.sleep(10)
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        
+        manager.disconnect(ws)
+
 # -------------------------
-# Helper Functions
-def fetch_latest_nodes(db):
-    rows = db.execute(text("""
-        SELECT t.*
-        FROM telemetry t
-        JOIN (
-            SELECT node, MAX(received_at) AS max_time
-            FROM telemetry
-            GROUP BY node
-        ) latest
-        ON t.node = latest.node AND t.received_at = latest.max_time
-    """)).mappings().all()
-
-    out = {}
-    for r in rows:
-        out[r["node"]] = {
-            "node": r["node"],
-            "lat": r["lat"],
-            "lon": r["lon"],
-            "temp": r["temp"],
-            "hum": r["hum"],
-            "smoke": r["smoke"],
-            "flame": bool(r["flame"]),
-            "received_at": r["received_at"].isoformat() if r["received_at"] else None,
-            "gateway": r.get("gateway"),
-        }
-    return out
-
-
-def fetch_active_incidents(db):
-    rows = db.execute(text("""
-        SELECT t.*
-        FROM telemetry t
-        JOIN (
-         SELECT node, MAX(received_at) AS max_time
-        FROM telemetry
-        GROUP BY node
-        ) latest
-        ON t.node = latest.node AND t.received_at = latest.max_time
-        """)).mappings().all()
-
-    return [
-        {
-            "node": r["node"],
-            "type": "flame" if r["flame"] else "smoke",
-            "received_at": r["received_at"].isoformat()
-        }
-        for r in rows
-    ]
-
-
-
+# Background broadcaster
+# -------------------------
 async def periodic_broadcast():
     while True:
-        await asyncio.sleep(5)
         db = SessionLocal()
-        nodes = fetch_latest_nodes(db)
-        incidents = fetch_active_incidents(db)
-        db.close()
+        try:
+            nodes = fetch_latest_nodes(db)
+            incidents = fetch_active_incidents(db)
 
-        await manager.broadcast({
-            "type": "snapshot",
-            "data": {
-                "nodes": nodes,
-                "incidents": incidents
+            payload = {
+                "type": "snapshot",
+                "data": {
+                    "nodes": nodes,
+                    "incidents": incidents,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
             }
-        })
 
+            await manager.broadcast(payload)
+
+        except Exception as e:
+            print("Broadcast error:", e)
+
+        finally:
+            db.close()
+
+        await asyncio.sleep(2)  # REALTIME interval
+
+# -------------------------
+# Startup
+# -------------------------
 @app.on_event("startup")
-async def start_broadcast():
+async def startup():
     asyncio.create_task(periodic_broadcast())
-
-
-# -------------------------
-# Sensor Ingest
-# -------------------------
-@app.post("/ingest")
-async def ingest(data: TelemetryIn):
-    db = SessionLocal()
-
-    row = Telemetry(
-        node=data.node,
-        session=data.session,
-        seq=data.seq,
-        temp=data.temp,
-        hum=data.hum,
-        lat=data.lat,
-        lon=data.lon,
-        flame=data.flame,
-        smoke=data.smoke,
-        gateway=data.gateway,
-        rssi=data.rssi,
-        snr=data.snr,
-        received_at=data.received_at
-    )
-
-    db.add(row)
-    db.commit()
-    db.close()
-
-    # Fire detection logic
-    if data.flame == 1 or (data.temp and data.temp >= 60) or (data.smoke and data.smoke >= 300):
-        incident = {
-            "node": data.node,
-            "severity": "HIGH",
-            "timestamp": data.received_at.isoformat()
-        }
-        incidents.append(incident)
-
-        await manager.broadcast({
-            "type": "incident",
-            "data": incident
-        })
-
-    await manager.broadcast({
-        "type": "node_update",
-        "data": data.dict()
-    })
-
-    return {"status": "stored"}
-
-
-
-
-# -------------------------
-# Dashboard APIs
-# -------------------------
-@app.get("/nodes")
-def get_nodes():
-    db = SessionLocal()
-
-    rows = (
-        db.query(Telemetry)
-        .order_by(Telemetry.received_at.desc())
-        .all()
-    )
-
-    db.close()
-
-    latest = {}
-    for r in rows:
-        if r.node not in latest:
-            latest[r.node] = {
-                "node": r.node,
-                "lat": r.lat,
-                "lon": r.lon,
-                "temp": r.temp,
-                "hum": r.hum,
-                "smoke": r.smoke,
-                "flame": bool(r.flame),
-                "received_at": r.received_at
-            }
-
-    return latest
-
-
-@app.get("/nodes/{node_id}")
-def get_node(node_id: str):
-    db = SessionLocal()
-
-    row = (
-        db.query(Telemetry)
-        .filter(Telemetry.node == node_id)
-        .order_by(Telemetry.received_at.desc())
-        .first()
-    )
-
-    db.close()
-
-    if not row:
-        return {"error": "Node not found"}
-
-    return {
-        "node": row.node,
-        "lat": row.lat,
-        "lon": row.lon,
-        "temp": row.temp,
-        "hum": row.hum,
-        "smoke": row.smoke,
-        "flame": bool(row.flame),
-        "received_at": row.received_at
-    }
-
-
-
-@app.get("/incidents")
-def get_incidents():
-    db = SessionLocal()
-
-    rows = (
-        db.query(Telemetry)
-        .filter(
-            (Telemetry.flame == 1) |
-            (Telemetry.temp >= 60) |
-            (Telemetry.smoke >= 300)
-        )
-        .order_by(Telemetry.received_at.desc())
-        .limit(20)
-        .all()
-    )
-
-    db.close()
-
-    incidents = []
-    seen_nodes = set()
-
-    for r in rows:
-        if r.node not in seen_nodes:
-            incidents.append({
-                "node": r.node,
-                "severity": "HIGH",
-                "lat": r.lat,
-                "lon": r.lon,
-                "timestamp": r.received_at
-            })
-            seen_nodes.add(r.node)
-
-    return incidents
-
-
-
-# -------------------------
-# Authentication APIs
-# -------------------------
-@app.post("/auth/signup")
-def signup(user: UserSignup):
-    db = SessionLocal()
-
-    # check duplicate username
-    if db.query(User).filter(User.username == user.username).first():
-        db.close()
-        raise HTTPException(status_code=400, detail="Username already exists")
-
-    password = user.password.encode("utf-8")[:72].decode("utf-8")
-    hashed = pwd_context.hash(password)
-
-
-    new_user = User(
-        username=user.username,
-        organization=user.organization,
-        password_hash=hashed
-    )
-
-    db.add(new_user)
-    db.commit()
-    db.close()
-
-    return {"message": "User registered successfully"}
-
-
-@app.post("/auth/login")
-def login(user: UserLogin):
-    db = SessionLocal()
-
-    db_user = db.query(User).filter(User.username == user.username).first()
-    if not db_user:
-        db.close()
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-
-    password = user.password.encode("utf-8")[:72].decode("utf-8")
-
-    if not pwd_context.verify(password, db_user.password_hash):
-        db.close()
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-
-    db.close()
-
-    return {
-        "message": "Login successful",
-        "user": {
-            "id": db_user.id,
-            "username": db_user.username,
-            "organization": db_user.organization
-        }
-    }
-
-
