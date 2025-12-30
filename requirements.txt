@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 pydantic
-passlib[bcrypt]=1.7.4
+passlib[bcrypt]==1.7.4
 sqlalchemy
 mysql-connector-python
 python-dotenv
