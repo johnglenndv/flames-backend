@@ -48,11 +48,15 @@ def root():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+
     try:
         while True:
-            await websocket.receive_text()
+            # 🔁 Heartbeat every 20s (keeps Render alive)
+            await asyncio.sleep(20)
+            await websocket.send_json({"type": "ping"})
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
         
 
 
