@@ -5,3 +5,5 @@ passlib[bcrypt]
 sqlalchemy
 mysql-connector-python
 python-dotenv
+uvicorn[standard]
+websockets
