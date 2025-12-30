@@ -7,7 +7,7 @@ from datetime import datetime
 from app.database import SessionLocal
 from app.websocket import manager
 
-from app.models import Telemetry as Node
+from app.models import Telemetry
 
 app = FastAPI()
 
@@ -28,19 +28,19 @@ app.add_middleware(
 def fetch_latest_nodes(db):
     subq = (
         db.query(
-            Node.node,
-            func.max(Node.received_at).label("max_time")
+            Telemetry.node,
+            func.max(Telemetry.received_at).label("max_time")
         )
-        .group_by(Node.node)
+        .group_by(Telemetry.node)
         .subquery()
     )
 
     rows = (
-        db.query(Node)
+        db.query(Telemetry)
         .join(
             subq,
-            (Node.node == subq.c.node) &
-            (Node.received_at == subq.c.max_time)
+            (Telemetry.node == subq.c.node) &
+            (Telemetry.received_at == subq.c.max_time)
         )
         .all()
     )
@@ -62,8 +62,8 @@ def fetch_latest_nodes(db):
 
 def fetch_active_incidents(db):
     rows = (
-        db.query(Node)
-        .filter((Node.flame == True) | (Node.smoke == True))
+        db.query(Telemetry)
+        .filter((Telemetry.flame == True) | (Telemetry.smoke == True))
         .all()
     )
 
