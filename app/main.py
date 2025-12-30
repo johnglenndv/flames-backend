@@ -7,7 +7,7 @@ from datetime import datetime
 from app.database import SessionLocal
 from app.websocket import manager
 
-from app.models import Node
+from app.models import Telemetry as Node
 
 app = FastAPI()
 
