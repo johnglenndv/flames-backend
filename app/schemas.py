@@ -2,27 +2,30 @@ from pydantic import BaseModel
 from datetime import datetime
 
 
-class NodeData(BaseModel):
-    node_id: str
-    lat: float
-    lng: float
-    temperature: float
-    humidity: float
-    smoke: float
-    flame: bool
-    timestamp: datetime
+class TelemetryIn(BaseModel):
+    node: str
+    session: int | None = None
+    seq: int | None = None
 
+    temp: float | None = None
+    hum: float | None = None
 
-class Incident(BaseModel):
-    node_id: str
-    severity: str
-    timestamp: datetime
+    lat: float | None = None
+    lon: float | None = None
 
+    flame: int | None = None
+    smoke: int | None = None
+
+    gateway: str | None = None
+    rssi: int | None = None
+    snr: float | None = None
+
+    received_at: datetime
 
 class UserSignup(BaseModel):
     username: str
     password: str
-
+    organization: str
 
 class UserLogin(BaseModel):
     username: str

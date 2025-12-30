@@ -6,6 +6,12 @@ from app.schemas import NodeData, UserSignup, UserLogin
 from app.state import nodes, incidents
 from app.websocket import manager
 
+from app.database import SessionLocal
+from app.models import Telemetry
+from app.schemas import TelemetryIn
+
+
+
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="F.L.A.M.E.S Backend")
@@ -50,20 +56,35 @@ async def websocket_endpoint(websocket: WebSocket):
 # Sensor Ingest
 # -------------------------
 @app.post("/ingest")
-async def ingest_data(data: NodeData):
-    nodes[data.node_id] = data.dict()
+async def ingest(data: TelemetryIn):
+    db = SessionLocal()
 
-    fire_detected = (
-        data.flame
-        or data.temperature >= 60
-        or data.smoke >= 300
+    row = Telemetry(
+        node=data.node,
+        session=data.session,
+        seq=data.seq,
+        temp=data.temp,
+        hum=data.hum,
+        lat=data.lat,
+        lon=data.lon,
+        flame=data.flame,
+        smoke=data.smoke,
+        gateway=data.gateway,
+        rssi=data.rssi,
+        snr=data.snr,
+        received_at=data.received_at
     )
 
-    if fire_detected:
+    db.add(row)
+    db.commit()
+    db.close()
+
+    # Fire detection logic
+    if data.flame == 1 or (data.temp and data.temp >= 60) or (data.smoke and data.smoke >= 300):
         incident = {
-            "node_id": data.node_id,
+            "node": data.node,
             "severity": "HIGH",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": data.received_at.isoformat()
         }
         incidents.append(incident)
 
@@ -77,7 +98,9 @@ async def ingest_data(data: NodeData):
         "data": data.dict()
     })
 
-    return {"status": "ok"}
+    return {"status": "stored"}
+
+
 
 
 # -------------------------
@@ -85,17 +108,96 @@ async def ingest_data(data: NodeData):
 # -------------------------
 @app.get("/nodes")
 def get_nodes():
-    return nodes
+    db = SessionLocal()
+
+    rows = (
+        db.query(Telemetry)
+        .order_by(Telemetry.received_at.desc())
+        .all()
+    )
+
+    db.close()
+
+    latest = {}
+    for r in rows:
+        if r.node not in latest:
+            latest[r.node] = {
+                "node": r.node,
+                "lat": r.lat,
+                "lon": r.lon,
+                "temp": r.temp,
+                "hum": r.hum,
+                "smoke": r.smoke,
+                "flame": bool(r.flame),
+                "received_at": r.received_at
+            }
+
+    return latest
 
 
 @app.get("/nodes/{node_id}")
 def get_node(node_id: str):
-    return nodes.get(node_id)
+    db = SessionLocal()
+
+    row = (
+        db.query(Telemetry)
+        .filter(Telemetry.node == node_id)
+        .order_by(Telemetry.received_at.desc())
+        .first()
+    )
+
+    db.close()
+
+    if not row:
+        return {"error": "Node not found"}
+
+    return {
+        "node": row.node,
+        "lat": row.lat,
+        "lon": row.lon,
+        "temp": row.temp,
+        "hum": row.hum,
+        "smoke": row.smoke,
+        "flame": bool(row.flame),
+        "received_at": row.received_at
+    }
+
 
 
 @app.get("/incidents")
 def get_incidents():
+    db = SessionLocal()
+
+    rows = (
+        db.query(Telemetry)
+        .filter(
+            (Telemetry.flame == 1) |
+            (Telemetry.temp >= 60) |
+            (Telemetry.smoke >= 300)
+        )
+        .order_by(Telemetry.received_at.desc())
+        .limit(20)
+        .all()
+    )
+
+    db.close()
+
+    incidents = []
+    seen_nodes = set()
+
+    for r in rows:
+        if r.node not in seen_nodes:
+            incidents.append({
+                "node": r.node,
+                "severity": "HIGH",
+                "lat": r.lat,
+                "lon": r.lon,
+                "timestamp": r.received_at
+            })
+            seen_nodes.add(r.node)
+
     return incidents
+
 
 
 # -------------------------
@@ -103,12 +205,44 @@ def get_incidents():
 # -------------------------
 @app.post("/auth/signup")
 def signup(user: UserSignup):
+    db = SessionLocal()
+
+    # check duplicate username
+    if db.query(User).filter(User.username == user.username).first():
+        db.close()
+        raise HTTPException(status_code=400, detail="Username already exists")
+
     hashed = pwd_context.hash(user.password)
-    # TODO: store in MySQL
-    return {"message": "User registered"}
+
+    new_user = User(
+        username=user.username,
+        organization=user.organization,
+        password_hash=hashed
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.close()
+
+    return {"message": "User registered successfully"}
 
 
 @app.post("/auth/login")
 def login(user: UserLogin):
-    # TODO: verify from MySQL
-    return {"message": "Login successful"}
+    db = SessionLocal()
+
+    db_user = db.query(User).filter(User.username == user.username).first()
+    db.close()
+
+    if not db_user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if not pwd_context.verify(user.password, db_user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    return {
+        "message": "Login successful",
+        "username": db_user.username,
+        "organization": db_user.organization
+    }
+
