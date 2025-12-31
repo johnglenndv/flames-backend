@@ -273,43 +273,36 @@ def login(user: UserLogin):
 
 # latest update
 @app.get("/nodes/latest")
-def get_latest_nodes(db: Session = Depends(get_db)):
-    """
-    Returns the latest telemetry row PER NODE.
-    Guaranteed to return data if telemetry table is not empty.
-    """
+def get_latest_nodes():
+    db = SessionLocal()
 
-    rows = db.execute(text("""
-        SELECT t.*
-        FROM telemetry t
-        JOIN (
-            SELECT node, MAX(received_at) AS latest
-            FROM telemetry
-            GROUP BY node
-        ) x
-        ON t.node = x.node
-        AND t.received_at = x.latest
-        ORDER BY t.node;
-    """)).mappings().all()
+    rows = (
+        db.query(Telemetry)
+        .order_by(Telemetry.received_at.desc())
+        .all()
+    )
 
-    # IMPORTANT: return an ARRAY (frontend expects array)
-    return [
-        {
-            "node": r["node"],
-            "session": r["session"],
-            "seq": r["seq"],
-            "temp": r["temp"],
-            "hum": r["hum"],
-            "smoke": r["smoke"],
-            "flame": r["flame"],
-            "lat": r["lat"],
-            "lon": r["lon"],
-            "gateway": r["gateway"],
-            "rssi": r["rssi"],
-            "snr": r["snr"],
-            "received_at": r["received_at"].isoformat()
-        }
-        for r in rows
-    ]
+    db.close()
 
+    latest = {}
 
+    for r in rows:
+        if r.node not in latest:
+            latest[r.node] = {
+                "node": r.node,
+                "session": r.session,
+                "seq": r.seq,
+                "temp": r.temp,
+                "hum": r.hum,
+                "smoke": r.smoke,
+                "flame": bool(r.flame),
+                "lat": r.lat,
+                "lon": r.lon,
+                "gateway": r.gateway,
+                "rssi": r.rssi,
+                "snr": r.snr,
+                "received_at": r.received_at.isoformat()
+            }
+
+    # 🔥 FRONTEND EXPECTS ARRAY
+    return list(latest.values())
