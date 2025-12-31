@@ -281,13 +281,27 @@ def get_latest_nodes(db: Session = Depends(get_db)):
             SELECT node, MAX(received_at) AS max_time
             FROM telemetry
             GROUP BY node
-        latest
+        ) latest
         ON t.node = latest.node
         AND t.received_at = latest.max_time
         ORDER BY t.node
     """)
 
-    result = db.execute(query).mappings().all()
-    return result
+    rows = db.execute(query).mappings().all()
+
+    nodes = []
+    for r in rows:
+        nodes.append({
+            "node": r["node"],
+            "lat": r["lat"],
+            "lon": r["lon"],
+            "temp": r["temp"],
+            "hum": r["hum"],
+            "smoke": r["smoke"],
+            "flame": bool(r["flame"]),
+            "received_at": r["received_at"].isoformat()
+        })
+
+    return nodes
 
 
