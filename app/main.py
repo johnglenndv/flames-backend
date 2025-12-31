@@ -164,7 +164,7 @@ def get_node(node_id: str):
     db.close()
 
     if not row:
-        return {"error": "Node not found"}
+        return []
 
     return {
         "node": row.node,
