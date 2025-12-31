@@ -274,36 +274,42 @@ def login(user: UserLogin):
 # latest update
 @app.get("/nodes/latest")
 def get_latest_nodes(db: Session = Depends(get_db)):
-    query = text("""
-        SELECT *
+    """
+    Returns the latest telemetry row PER NODE.
+    Guaranteed to return data if telemetry table is not empty.
+    """
+
+    rows = db.execute(text("""
+        SELECT t.*
         FROM telemetry t
-        WHERE t.id IN (
-            SELECT id
-            FROM (
-                SELECT id
-                FROM telemetry
-                ORDER BY node, received_at DESC
-            ) x
+        JOIN (
+            SELECT node, MAX(received_at) AS latest
+            FROM telemetry
             GROUP BY node
-        )
-        ORDER BY node;
-    """)
+        ) x
+        ON t.node = x.node
+        AND t.received_at = x.latest
+        ORDER BY t.node;
+    """)).mappings().all()
 
-    rows = db.execute(query).mappings().all()
-
+    # IMPORTANT: return an ARRAY (frontend expects array)
     return [
         {
             "node": r["node"],
-            "lat": r["lat"],
-            "lon": r["lon"],
+            "session": r["session"],
+            "seq": r["seq"],
             "temp": r["temp"],
             "hum": r["hum"],
             "smoke": r["smoke"],
-            "flame": bool(r["flame"]),
+            "flame": r["flame"],
+            "lat": r["lat"],
+            "lon": r["lon"],
+            "gateway": r["gateway"],
+            "rssi": r["rssi"],
+            "snr": r["snr"],
             "received_at": r["received_at"].isoformat()
         }
         for r in rows
     ]
-
 
 
