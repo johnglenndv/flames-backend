@@ -307,3 +307,10 @@ def get_latest_nodes():
 
     # 🔥 FRONTEND EXPECTS ARRAY
     return list(latest.values())
+
+@app.get("/debug/db")
+def debug_db():
+    db = SessionLocal()
+    count = db.query(Telemetry).count()
+    db.close()
+    return {"telemetry_rows": count}
