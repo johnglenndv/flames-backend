@@ -275,23 +275,24 @@ def login(user: UserLogin):
 @app.get("/nodes/latest")
 def get_latest_nodes(db: Session = Depends(get_db)):
     query = text("""
-        SELECT t.*
+        SELECT *
         FROM telemetry t
-        JOIN (
-            SELECT node, MAX(received_at) AS max_time
-            FROM telemetry
+        WHERE t.id IN (
+            SELECT id
+            FROM (
+                SELECT id
+                FROM telemetry
+                ORDER BY node, received_at DESC
+            ) x
             GROUP BY node
-        ) latest
-        ON t.node = latest.node
-        AND t.received_at = latest.max_time
-        ORDER BY t.node
+        )
+        ORDER BY node;
     """)
 
     rows = db.execute(query).mappings().all()
 
-    nodes = []
-    for r in rows:
-        nodes.append({
+    return [
+        {
             "node": r["node"],
             "lat": r["lat"],
             "lon": r["lon"],
@@ -300,8 +301,9 @@ def get_latest_nodes(db: Session = Depends(get_db)):
             "smoke": r["smoke"],
             "flame": bool(r["flame"]),
             "received_at": r["received_at"].isoformat()
-        })
+        }
+        for r in rows
+    ]
 
-    return nodes
 
 
