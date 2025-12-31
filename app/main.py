@@ -6,7 +6,7 @@ from passlib.context import CryptContext
 from app.models import User
 
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, func
 
 from app.schemas import TelemetryIn, UserSignup, UserLogin
 from app.state import nodes, incidents
@@ -273,40 +273,27 @@ def login(user: UserLogin):
 
 # latest update
 @app.get("/nodes/latest")
-def get_latest_nodes():
-    print("🔥 /nodes/latest HIT — VERSION 2025-01-DEBUG")
-    db = SessionLocal()
+def get_latest_nodes(db: Session = Depends(get_db)):
+    subquery = (
+        db.query(
+            Telemetry.node,
+            func.max(Telemetry.received_at).label("max_time")
+        )
+        .group_by(Telemetry.node)
+        .subquery()
+    )
 
     rows = (
         db.query(Telemetry)
-        .order_by(Telemetry.received_at.desc())
+        .join(
+            subquery,
+            (Telemetry.node == subquery.c.node)
+            & (Telemetry.received_at == subquery.c.max_time)
+        )
         .all()
     )
 
-    db.close()
-
-    latest = {}
-
-    for r in rows:
-        if r.node not in latest:
-            latest[r.node] = {
-                "node": r.node,
-                "session": r.session,
-                "seq": r.seq,
-                "temp": r.temp,
-                "hum": r.hum,
-                "smoke": r.smoke,
-                "flame": bool(r.flame),
-                "lat": r.lat,
-                "lon": r.lon,
-                "gateway": r.gateway,
-                "rssi": r.rssi,
-                "snr": r.snr,
-                "received_at": r.received_at.isoformat()
-            }
-
-    # 🔥 FRONTEND EXPECTS ARRAY
-    return list(latest.values())
+    return rows
 
 @app.get("/debug/db")
 def debug_db():
