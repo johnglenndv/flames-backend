@@ -1,15 +1,18 @@
 import asyncio
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from datetime import datetime
 from passlib.context import CryptContext
 from app.models import User
+
+from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.schemas import TelemetryIn, UserSignup, UserLogin
 from app.state import nodes, incidents
 from app.websocket import manager
 
-from app.database import SessionLocal
+from app.database import SessionLocal, get_db
 from app.models import Telemetry
 from app.schemas import TelemetryIn
 
@@ -266,5 +269,25 @@ def login(user: UserLogin):
             "organization": db_user.organization
         }
     }
+
+
+# latest update
+@app.get("/nodes/latest")
+def get_latest_nodes(db: Session = Depends(get_db)):
+    query = text("""
+        SELECT t.*
+        FROM telemetry t
+        JOIN (
+            SELECT node, MAX(received_at) AS max_time
+            FROM telemetry
+            GROUP BY node
+        latest
+        ON t.node = latest.node
+        AND t.received_at = latest.max_time
+        ORDER BY t.node
+    """)
+
+    result = db.execute(query).mappings().all()
+    return result
 
 
