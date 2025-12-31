@@ -274,6 +274,7 @@ def login(user: UserLogin):
 # latest update
 @app.get("/nodes/latest")
 def get_latest_nodes():
+    print("🔥 /nodes/latest HIT — VERSION 2025-01-DEBUG")
     db = SessionLocal()
 
     rows = (
